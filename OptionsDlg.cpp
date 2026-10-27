@@ -197,7 +197,16 @@ static LRESULT CALLBACK DlgWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
                     swprintf_s(msg2, L"连接成功！当前功率：%.1fW", watts);
                     SetWindowTextW(st->hStaticStatus, msg2);
                 } else {
-                    SetWindowTextW(st->hStaticStatus, L"连接失败，请检查 IP/Token 和网络");
+                    // 显示具体失败原因（LastError 为 UTF-8）
+                    wchar_t msg3[256] = L"连接失败：";
+                    int n = MultiByteToWideChar(CP_UTF8, 0, dev.LastError().c_str(),
+                                                (int)dev.LastError().size(), msg3 + 5, 240);
+                    if (n > 0) {
+                        msg3[5 + n] = 0;
+                        SetWindowTextW(st->hStaticStatus, msg3);
+                    } else {
+                        SetWindowTextW(st->hStaticStatus, L"连接失败，请检查 IP/Token 和网络");
+                    }
                 }
             } catch (...) {
                 SetWindowTextW(st->hStaticStatus, L"连接异常，请检查 IP/Token");

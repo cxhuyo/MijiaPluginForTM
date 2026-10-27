@@ -519,18 +519,46 @@ bool MiioDevice::Send(const std::string& method, const std::string& paramsJson, 
 }
 
 bool MiioDevice::GetPower(double& outWatts) {
-    // get_properties: siid=11, piid=2 (功率)
-    std::string params = "[{\"did\":\"prop\",\"siid\":11,\"piid\":2}]";
-    std::string result;
-    if (!Send("get_properties", params, result)) return false;
-    // 在结果中找 "value": 数字
-    auto pos = result.find("\"value\":");
-    if (pos == std::string::npos) return false;
-    pos += 8;
-    while (pos < result.size() && (result[pos]==' ' || result[pos]=='\t')) pos++;
-    double val = 0.0;
-    try { val = std::stod(result.substr(pos)); }
-    catch (...) { return false; }
-    outWatts = val;
-    return true;
+    m_lastError.clear();
+
+    // 已知功率属性候选表：{siid, piid, scale}
+    //  - chuangmi.plug.212a01（米家智能插座2）：siid=5/piid=6，原始值单位 0.01W（实测 27671 -> 276.71W）
+    //  - cuco.plug.v3（原版插件）：siid=11/piid=2，原始值即瓦特
+    static const MiioProperty kCandidates[] = {
+        {5,  6, 0.01},
+        {11, 2, 1.0},
+    };
+    const int kCandCount = sizeof(kCandidates) / sizeof(kCandidates[0]);
+
+    // 已锁定属性时只查它；否则依次探测
+    for (int i = 0; i < kCandCount; ++i) {
+        if (m_propPinned && i > 0) break;   // 锁定后不再尝试其它候选
+        MiioProperty prop = m_propPinned ? m_powerProp : kCandidates[i];
+
+        std::ostringstream oss;
+        oss << "[{\"did\":\"prop\",\"siid\":" << prop.siid
+            << ",\"piid\":" << prop.piid << "}]";
+        std::string result;
+        if (!Send("get_properties", oss.str(), result)) {
+            m_lastError = "设备无响应：UDP未收到回复（IP不通或Token错误）";
+            return false;
+        }
+
+        // 在结果中找 "value": 数字
+        auto pos = result.find("\"value\":");
+        if (pos == std::string::npos) continue;   // 该属性不存在，尝试下一个候选
+        pos += 8;
+        while (pos < result.size() && (result[pos]==' ' || result[pos]=='\t')) pos++;
+        double val = 0.0;
+        try { val = std::stod(result.substr(pos)); }
+        catch (...) { continue; }
+
+        m_powerProp  = prop;
+        m_propPinned = true;
+        outWatts     = val * prop.scale;
+        return true;
+    }
+
+    m_lastError = "设备通信正常，但找不到功率属性（该设备可能不支持电量计量）";
+    return false;
 }
